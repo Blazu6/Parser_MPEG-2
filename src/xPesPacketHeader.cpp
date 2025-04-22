@@ -6,6 +6,8 @@ void xPES_PacketHeader::Reset()
   m_PacketStartCodePrefix = 0;
   m_StreamId = 0;
   m_PacketLength = 0;
+  m_PTS = 0;
+  m_DTS = 0;
 }
 
 int32_t xPES_PacketHeader::Parse(const uint8_t* Input)
@@ -51,29 +53,27 @@ int32_t xPES_PacketHeader::Parse(const uint8_t* Input)
     PTS_DTS_flags = (Input[7] & 0xC0) >> 6; // PTS/DTS flags
     if (PTS_DTS_flags == 2)//Tylko PTS
     {
-      m_PTS = (((uint64_t)Input[9]  & 0x0E) << 29) | //32..30 4 bity pierwsze pomijamy wyciagamy kolejne 3 i ostatni to marker
+      m_PTS = (((uint64_t)(Input[9]>>1) & 0x07) << 30) | //32..30
                     (((uint64_t)Input[10]) << 22) | //29..22
-                    ((((uint64_t)Input[11] & 0xFE)) << 14) | //21..14
-                    (((uint64_t)Input[12]) << 7) | //13..7
-                    (((uint64_t)Input[13]) >> 1); //6..0
-      headerLength += 5; // +5 bajtów bo 4 bajty PTS + 1 bajt rezerwowy
+                    ((((uint64_t)(Input[11] >> 1) & 0x7F)) << 15) | //21..15
+                    (((uint64_t)Input[12]) << 7) | //14..7
+                    (((uint64_t)(Input[13] >> 1) & 0x7F) >> 1); //6..0
     }
     else if (PTS_DTS_flags == 3)//DTS I PTS
     {
-      m_PTS = (((uint64_t)Input[9]  & 0x0E) << 29) |
-                    (((uint64_t)Input[10]) << 22) |
-                    ((((uint64_t)Input[11] & 0xFE)) << 14) |
-                    (((uint64_t)Input[12]) << 7) |
-                    (((uint64_t)Input[13]) >> 1);
-      m_DTS = (((uint64_t)Input[14] & 0x0E) << 29) |
-                    (((uint64_t)Input[15]) << 22) |
-                    ((((uint64_t)Input[16] & 0xFE)) << 14) |
-                    (((uint64_t)Input[17]) << 7) |
-                    (((uint64_t)Input[18]) >> 1);
-      
-      headerLength += 10; // +10 bajtów bo 8 bajtów PTS i DTS + 2 bajty rezerwowe
+      m_PTS = (((uint64_t)(Input[9]>>1) & 0x07) << 30) | //32..30
+                    (((uint64_t)Input[10]) << 22) | //29..22
+                    ((((uint64_t)(Input[11] >> 1) & 0x7F)) << 15) | //21..15
+                    (((uint64_t)Input[12]) << 7) | //14..7
+                    (((uint64_t)(Input[13] >> 1) & 0x7F) >> 1); //6..0
+      m_DTS = (((uint64_t)(Input[14]>>1) & 0x07) << 30) | //32..30
+                    (((uint64_t)Input[15]) << 22) | //29..22
+                    ((((uint64_t)(Input[16] >> 1) & 0x7F)) << 15) | //21..15
+                    (((uint64_t)Input[17]) << 7) | //14..7
+                    (((uint64_t)(Input[18] >> 1) & 0x7F) >> 1); //6..0
     }
   }
+  headerLength += Input[8]; // Długość rozszerzonego nagłówka
   return headerLength;
 }
 
