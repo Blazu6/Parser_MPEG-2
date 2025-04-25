@@ -26,22 +26,29 @@ xPES_Assembler::~xPES_Assembler() {
 
 xPES_Assembler::eResult xPES_Assembler::AbsorbPacket(const uint8_t* TransportStreamPacket, const xTS_PacketHeader* PacketHeader, const xTS_AdaptationField* AdaptationField)
 {
-  switch (m_PID) 
-  {
-    case 136:
-        file_extension = ".mp2";
-        break;
-  }
 
-  file_name = "PID136.mp2" + file_extension;
+    if (PacketHeader->getPID() != m_PID) {
+        return eResult::UnexpectedPID;
+    }
+    
+    switch (m_PID) 
+    {
+        case 136:
+            file_extension = ".mp2";
+            break;
 
+        case 174:
+            file_extension = ".264";
+            break;
+    }
 
+    file_name = std::to_string(m_PID) + file_extension;
 
     uint8_t curentCC = PacketHeader->getCC();
     if (m_LastContinuityCounter >= 0 && (m_LastContinuityCounter + 1) % 16 != curentCC) {
         return eResult::StreamPackedLost;
     }
-    m_LastContinuityCounter = curentCC; // sprawdzenie ciągłości pakietów
+    m_LastContinuityCounter = curentCC;
 
     int payloadStart = 4; // TS nagłówek
     if (PacketHeader->hasAdaptationField()) {
@@ -53,7 +60,7 @@ xPES_Assembler::eResult xPES_Assembler::AbsorbPacket(const uint8_t* TransportStr
 
     if (PacketHeader->getStartFlag() == 1) {  // flaga startu – początek PES
         m_PESH.Reset();
-        m_PESH.Parse(payload);
+        m_PESHLength = m_PESH.Parse(payload);
         xBufferReset();
         // Ustawiamy bufor na długość z pola PES_packet_length plus 6 bajtów nagłówka
         m_BufferSize = m_PESH.getPacketLength() + 6;
