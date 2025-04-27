@@ -22,93 +22,101 @@ xPES_Assembler::~xPES_Assembler() {
     }
 }
 
+void xPES_Assembler::Init(int32_t PID) {
+    m_PID = PID;
+    m_BufferSize = 65536;  // Initial buffer size
+    m_DataOffset = 0;
+    m_LastContinuityCounter = -1;
+    m_Started = false;
+    m_PESHLength = 0;
+}
 
 
-xPES_Assembler::eResult xPES_Assembler::AbsorbPacket(const uint8_t* TransportStreamPacket, const xTS_PacketHeader* PacketHeader, const xTS_AdaptationField* AdaptationField)
-{
+
+xPES_Assembler::eResult xPES_Assembler::AbsorbPacket(
+const uint8_t* TransportStreamPacket, const xTS_PacketHeader* PacketHeader, const xTS_AdaptationField* AdaptationField){
 
     if (PacketHeader->getPID() != m_PID) {
         return eResult::UnexpectedPID;
     }
-    
-    switch (m_PID) 
-    {
-        case 136:
-            file_extension = ".mp2";
-            break;
 
-        case 174:
-            file_extension = ".264";
-            break;
+    int start, payload;
+
+    start = PacketHeader->hasAdaptationField() ? xTS::TS_HeaderLength + AdaptationField->getAdaptationFieldLength() + 1
+    : xTS::TS_HeaderLength;//pozycja od ktorej zaczyna sie payload
+    payload = xTS::TS_PacketLength - start;//dlugosc payloadu
+
+        // Korekta dla specjalnego przypadku AdaptationFieldLength == 0
+    if (PacketHeader->hasAdaptationField() && AdaptationField->getAdaptationFieldLength() == 0) {
+        start --;
+        payload ++;
     }
 
-    file_name = std::to_string(m_PID) + file_extension;
-
-    uint8_t curentCC = PacketHeader->getCC();
-    if (m_LastContinuityCounter >= 0 && (m_LastContinuityCounter + 1) % 16 != curentCC) {
-        return eResult::StreamPackedLost;
-    }
-    m_LastContinuityCounter = curentCC;
-
-    int payloadStart = 4; // TS nagłówek
-    if (PacketHeader->hasAdaptationField()) {
-        payloadStart += AdaptationField->getAdaptationFieldLength() + 1;
-    }
-
-    const uint8_t* payload = TransportStreamPacket + payloadStart;
-    int payloadSize = 188 - payloadStart;
-
-    if (PacketHeader->getStartFlag() == 1) {  // flaga startu – początek PES
-        m_PESH.Reset();
-        m_PESHLength = m_PESH.Parse(payload);
-        xBufferReset();
-        // Ustawiamy bufor na długość z pola PES_packet_length plus 6 bajtów nagłówka
-        m_BufferSize = m_PESH.getPacketLength() + 6;
-        if (m_BufferSize > 0) {
-            m_Buffer = new uint8_t[m_BufferSize];
+    if (m_Started){
+        if (PacketHeader->getStartFlag()){
+            m_Started = false;
+            return eResult::AssemblingFinished;
+        } else if (m_LastContinuityCounter != -1){
+            if (PacketHeader->getCC() - m_LastContinuityCounter != 1){
+                if (PacketHeader->getCC() == 0 && m_LastContinuityCounter == 15){
+                    m_LastContinuityCounter = 0;
+                } else {
+                   return eResult::StreamPackedLost;
+                }
+            }
         }
-        // Kopiujemy cały payload, włączając nagłówek PES (6 bajtów) – nie odejmujemy 6
-        xBufferAppend(payload, payloadSize);
+    } else {
+        if (PacketHeader->getStartFlag()){
+            xBufferReset();
+            Init(m_PID);
+            m_PESH.Reset();
+            m_PESHLength = m_PESH.Parse(&TransportStreamPacket[start]);
+        }
+        m_Started = true;
+    }
+    xBufferAppend(&TransportStreamPacket[start], payload);
+
+    if (PacketHeader->getStartFlag()){
         return eResult::AssemblingStarted;
     }
-    else {
-        xBufferAppend(payload, payloadSize);
-        if (m_BufferSize == m_DataOffset) {
-          FILE* file = fopen(file_name.c_str(), "ab");  // Otwieramy plik w trybie binarnym (append)
-          if (file != nullptr) {
-              fwrite(m_Buffer, sizeof(uint8_t), m_DataOffset, file);  // Zapisujemy dane
-              fclose(file);  // Zamykamy plik
-          }
-          return eResult::AssemblingFinished;
+
+    return eResult::AssemblingContinue;
+}
+
+
+
+
+
+void xPES_Assembler::xBufferReset() {
+    if (m_Buffer != nullptr) {
+        delete[] m_Buffer;
+        m_Buffer = nullptr;
+    }
+    m_BufferSize = 65536;  // Przywróć standardowy rozmiar początkowy bufora
+    m_DataOffset = 0;
+    m_Buffer = new uint8_t[m_BufferSize];  // Zainicjalizuj nowy bufor o tym rozmiarze
+}
+
+
+void xPES_Assembler::xBufferAppend(const uint8_t *input, int32_t size) {
+    //inicjalizuje w init buffer na 65536 wiec bedize trzeba potencjalnie go powiekszac
+    //obecny offset czyli ile juz jest danych w buforze
+    if (m_DataOffset + size > m_BufferSize){
+        uint32_t newSize = m_BufferSize;
+        while (newSize < m_DataOffset + size) {
+            newSize *= 2; // podwajamy rozmiar
         }
-        return eResult::AssemblingContinue;
+        uint8_t* newBuffer = new uint8_t[newSize];
+        memcpy(newBuffer, m_Buffer, m_DataOffset);//do nowo utworzono wiekszego bufora kopiujemy stare dane
+        delete[] m_Buffer; //usuwamy stary bufor
+        m_Buffer = newBuffer; //przypisujemy nowy bufor
+        m_BufferSize = newSize; //aktualizujemy rozmiar bufora
     }
+    //Kopiujemy nowe dane z inputa
+    memcpy(m_Buffer + m_DataOffset, input, size);//+ooffset bo chcemy dodac tylko nowe dane na koniec buffora
+    m_DataOffset += size; //aktualizujemy offset
 }
 
-
-
-
-
-void xPES_Assembler::xBufferReset()
-{
-  if (m_Buffer != nullptr) {
-      delete[] m_Buffer;
-      m_Buffer = nullptr;
-  }
-  m_BufferSize = 0;
-  m_DataOffset = 0;
-}
-
-void xPES_Assembler::xBufferAppend(const uint8_t *input, int32_t size) 
-{
-   if (m_DataOffset + size > m_BufferSize) {
-        std::cerr << "Error: Buffer overflow!" << std::endl;
-        return;
-    }
-    memcpy(m_Buffer + m_DataOffset, input, size); // Kopiowanie danych do bufora 
-    // poczatek miejsca gdzie kopiowac, skad kopiowac, dlugosc do skopiowania
-    m_DataOffset += size; // Aktualizacja offsetu
-}
 
 
 
