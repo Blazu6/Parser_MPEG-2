@@ -4,6 +4,7 @@
 #include "tsAdaptationField.h"
 #include "xPesPacketHeader.h"
 #include "xPesAssembler.h"
+#include "mpegAudioHeader.h"
 #include <iostream>
 #include <fstream>
 
@@ -38,13 +39,14 @@ int main(int argc, char *argv[], char *envp[])
 
   xTS_PacketHeader    TS_PacketHeader;
   xTS_AdaptationField TS_AdaptationField;
+  mpegHeader          mpegHeaderObj;
 
   int32_t TS_PacketId = 0;
   uint8_t TS_PacketBuffer[xTS::TS_PacketLength];
   size_t bytesRead;
   long prevPos = 0;
 
-  while (!feof(inputFile) && TS_PacketId <500000) {
+  while (!feof(inputFile) && TS_PacketId <50) {
     prevPos = ftell(inputFile);
     bytesRead = fread(TS_PacketBuffer, 1, xTS::TS_PacketLength, inputFile);
     if (bytesRead != xTS::TS_PacketLength) {
@@ -87,10 +89,27 @@ int main(int argc, char *argv[], char *envp[])
       auto Result = asmblr.AbsorbPacket(TS_PacketBuffer, &TS_PacketHeader, &TS_AdaptationField);
       switch(Result)
       {
-        case xPES_Assembler::eResult::StreamPackedLost : printf(" PcktLost "); break;
-        case xPES_Assembler::eResult::AssemblingStarted : printf(" Started "); asmblr.PrintPESH(); break;
+        case xPES_Assembler::eResult::StreamPackedLost : {
+          printf(" PcktLost "); ;
+          break;
+        }
+        case xPES_Assembler::eResult::AssemblingStarted : {
+          printf(" Started "); 
+          asmblr.PrintPESH(); 
+          // Obliczamy, skąd zaczyna się payload (pierwsze bajty audio) w TS:
+          int start = xTS::TS_HeaderLength;
+          if (TS_PacketHeader.hasAdaptationField()) {
+              start += TS_AdaptationField.getAdaptationFieldLength() + 1;
+          }
+          uint8_t  PES_Hdr  = asmblr.getPESHLength();
+          mpegHeaderObj.Reset();
+          mpegHeaderObj.Parse(TS_PacketBuffer + start + PES_Hdr);
+          mpegHeaderObj.Print();
+          break;
+        }
         case xPES_Assembler::eResult::AssemblingContinue: printf(" Continue "); break;
-        case xPES_Assembler::eResult::AssemblingFinished: printf(" Finished "); {
+        case xPES_Assembler::eResult::AssemblingFinished: {
+          printf(" Finished "); 
           fseek(inputFile, prevPos, SEEK_SET);
           printf("PES: Len=%d HeadLen=%d DataLen=%d",
             asmblr.getNumPacketBytes(), asmblr.getPESHLength(), 
